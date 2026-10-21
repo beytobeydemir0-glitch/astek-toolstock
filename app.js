@@ -3,9 +3,9 @@ const SUPABASE_URL='https://bsipxpylwjrcgleiecdc.supabase.co';
 const SUPABASE_KEY='sb_publishable__K2Bx_vBjkpDaPqtLDHqYQ_CUUxuQ-d';
 const sb=createClient(SUPABASE_URL,SUPABASE_KEY);
 const KEY='stokcepte-v1';
-let data=load(), profile=null, cloudReady=false, cloudDirty=false, syncBusy=false, cloudLoadBusy=false, lastSnapshot={products:[],tools:[],users:[],activity:[]};
+let data=load(), profile=null, cloudReady=false, cloudDirty=false, syncBusy=false, cloudLoadBusy=false, localChangeVersion=0, lastSnapshot={products:[],tools:[],users:[],activity:[]};
 function load(){let d;try{d=JSON.parse(localStorage.getItem(KEY))}catch{}d=d||{products:[],tools:[],users:[],activity:[]};d.products||=[];d.tools||=[];d.users||=[];d.activity||=[];if(d.users.length===1&&d.users[0].name==='Admin'&&d.users[0].role==='Yönetici'&&!localStorage.getItem('stokcepte-user'))d.users=[];d.users=d.users.map(u=>{if(!u.firstName){const parts=(u.name||'').trim().split(/\s+/);u.firstName=parts.shift()||'';u.lastName=parts.join(' ')}return u});if(d.users.length&&!d.users.some(u=>u.role==='Patron')){const selected=localStorage.getItem('stokcepte-user');const owner=d.users.find(u=>fullName(u)===selected)||d.users[0];owner.role='Patron'}return d}
-function save(){localStorage.setItem(KEY,JSON.stringify(data));render();if(!cloudReady)return Promise.resolve(true);cloudDirty=true;clearTimeout(window.astekSyncTimer);window.astekSyncTimer=null;setSyncLabel('Kaydediliyor…','Buluta aktarılıyor');return syncCloud().then(()=>true).catch(e=>{setSyncLabel('Kayıt hatası','Yeniden deneyin');toast('Buluta kaydedilemedi: '+(e.message||'bağlantıyı kontrol et'));return false})}
+function save(){localChangeVersion++;localStorage.setItem(KEY,JSON.stringify(data));render();if(!cloudReady)return Promise.resolve(true);cloudDirty=true;clearTimeout(window.astekSyncTimer);window.astekSyncTimer=null;setSyncLabel('Kaydediliyor…','Buluta aktarılıyor');return syncCloud().then(()=>true).catch(e=>{setSyncLabel('Kayıt hatası','Yeniden deneyin');toast('Buluta kaydedilemedi: '+(e.message||'bağlantıyı kontrol et'));return false})}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>crypto.randomUUID();
@@ -18,7 +18,7 @@ const clone=x=>JSON.parse(JSON.stringify(x));
 function setSyncLabel(title,sub){$('#syncTitle').textContent=title;$('#syncSub').textContent=sub}
 function snapshot(){return {products:clone(data.products),tools:clone(data.tools),users:clone(data.users),activity:clone(data.activity)}}
 async function loadCloud(){
- if(cloudLoadBusy)return;cloudLoadBusy=true;try{
+ if(cloudLoadBusy)return;cloudLoadBusy=true;const readVersion=localChangeVersion;try{
  const {data:mine,error:mineError}=await sb.from('profiles').select('*').eq('id',profile.id).single();
  if(mineError||!mine?.approved){cloudReady=false;data={products:[],tools:[],users:[],activity:[]};profile=null;render();await sb.auth.signOut();return}
  profile={...profile,firstName:mine.first_name,lastName:mine.last_name,role:mine.role,approved:mine.approved};
@@ -27,7 +27,7 @@ async function loadCloud(){
  ]);
  for(const r of [itemsRes,activityRes,profilesRes])if(r.error)throw r.error;
  const items=itemsRes.data||[];
- if(cloudDirty||syncBusy)return;
+ if(localChangeVersion!==readVersion||cloudDirty||syncBusy)return;
  data.products=items.filter(x=>x.kind==='products').map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));
  data.tools=items.filter(x=>x.kind==='tools').map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));
  data.activity=(activityRes.data||[]).map(x=>({id:x.id,text:x.text,type:x.type,detail:x.detail,by:x.by_name,date:Date.parse(x.created_at)||Date.now()}));
