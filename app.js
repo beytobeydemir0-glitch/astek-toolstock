@@ -36,21 +36,22 @@ if(!mine?.approved){
  ]);
  for(const r of [itemsRes,activityRes,deletionsRes,profilesRes])if(r.error)throw r.error;
  const items=itemsRes.data||[];
-  if(false&&(data.products.length>0||data.tools.length>0)){
- console.warn('Supabase boş liste döndürdü; stok listesi korundu.');
- return;
-}
  if(localChangeVersion!==readVersion||cloudDirty||syncBusy)return;
- const localData=load(),itemsForTombstones=itemsRes.data||[],deletedIds=new Set((deletionsRes.data||[]).map(x=>x.detail));cloudDeletedIds=deletedIds;const resetAt=Math.max(0,...(activityRes.data||[]).filter(x=>x.type==='sync-reset').map(x=>Date.parse(x.created_at)||0));const cloudHasInventory=itemsForTombstones.length>0,legacyMigrationDone=localStorage.getItem('stokcepte-cloud-migrated-v1')==='1';
+ const localData=load(),deletedIds=new Set((deletionsRes.data||[]).map(x=>x.detail));cloudDeletedIds=deletedIds;const resetAt=Math.max(0,...(activityRes.data||[]).filter(x=>x.type==='sync-reset').map(x=>Date.parse(x.created_at)||0));const cloudHasInventory=items.length>0,legacyMigrationDone=localStorage.getItem('stokcepte-cloud-migrated-v1')==='1';
  for(const kind of ['products','tools']){
-  for(const item of itemsForTombstones)if(item.kind===kind&&deletedIds.has(item.id)&&!pendingSync.deletes[kind].includes(item.id)){pendingSync.deletes[kind].push(item.id);pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>id!==item.id)}
-  const cloudIds=new Set(itemsForTombstones.filter(x=>x.kind===kind&&!deletedIds.has(x.id)).map(x=>x.id));
-  if(!cloudHasInventory&&!legacyMigrationDone)for(const item of localData[kind])if(!cloudIds.has(item.id)&&!pendingSync.deletes[kind].includes(item.id)&&!deletedIds.has(item.id)&&(!resetAt||+item.updated>resetAt)){if(!pendingSync.upserts[kind].includes(item.id))pendingSync.upserts[kind].push(item.id)}
+  // Drop an old queued delete if the item is still present in local inventory
+  // and no cloud tombstone confirms that the user deleted it.
+  const localIds=new Set(localData[kind].map(x=>x.id));const staleDeletes=pendingSync.deletes[kind].filter(id=>localIds.has(id)&&!deletedIds.has(id));pendingSync.deletes[kind]=pendingSync.deletes[kind].filter(id=>!staleDeletes.includes(id));for(const id of staleDeletes)if(!pendingSync.upserts[kind].includes(id))pendingSync.upserts[kind].push(id);
+  for(const item of items)if(item.kind===kind&&deletedIds.has(item.id)&&!pendingSync.deletes[kind].includes(item.id)){pendingSync.deletes[kind].push(item.id);pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>id!==item.id)}
+  const cloudIds=new Set(items.filter(x=>x.kind===kind&&!deletedIds.has(x.id)).map(x=>x.id));
+  // Keep local-only rows queued until the cloud confirms them. This also
+  // protects inventory from a successful-but-empty/partial API response.
+  // Explicit deletes remain authoritative through their sync-delete tombstone.
+  for(const item of localData[kind])if(!cloudIds.has(item.id)&&!pendingSync.deletes[kind].includes(item.id)&&!deletedIds.has(item.id)&&(!resetAt||+item.updated>resetAt)){if(!pendingSync.upserts[kind].includes(item.id))pendingSync.upserts[kind].push(item.id)}
  }
  if(!legacyMigrationDone&&(cloudHasInventory||localData.products.length||localData.tools.length))localStorage.setItem('stokcepte-cloud-migrated-v1','1');
- data.products=itemsForTombstones.filter(x=>x.kind==='products'&&!deletedIds.has(x.id)).map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));for(const id of pendingSync.deletes.products)data.products=data.products.filter(x=>x.id!==id);for(const id of pendingSync.upserts.products){const item=localData.products.find(x=>x.id===id);if(item&&!pendingSync.deletes.products.includes(id)&&!deletedIds.has(id)){const i=data.products.findIndex(x=>x.id===id);if(i<0)data.products.push(item);else data.products[i]=item}}
- data.tools=itemsForTombstones.filter(x=>x.kind==='tools'&&!deletedIds.has(x.id)).map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));for(const id of pendingSync.deletes.tools)data.tools=data.tools.filter(x=>x.id!==id);for(const id of pendingSync.upserts.tools){const item=localData.tools.find(x=>x.id===id);if(item&&!pendingSync.deletes.tools.includes(id)&&!deletedIds.has(id)){const i=data.tools.findIndex(x=>x.id===id);if(i<0)data.tools.push(item);else data.tools[i]=item}}
-
+ data.products=items.filter(x=>x.kind==='products'&&!deletedIds.has(x.id)).map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));for(const id of pendingSync.deletes.products)data.products=data.products.filter(x=>x.id!==id);for(const id of pendingSync.upserts.products){const item=localData.products.find(x=>x.id===id);if(item&&!pendingSync.deletes.products.includes(id)&&!deletedIds.has(id)){const i=data.products.findIndex(x=>x.id===id);if(i<0)data.products.push(item);else data.products[i]=item}}
+ data.tools=items.filter(x=>x.kind==='tools'&&!deletedIds.has(x.id)).map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));for(const id of pendingSync.deletes.tools)data.tools=data.tools.filter(x=>x.id!==id);for(const id of pendingSync.upserts.tools){const item=localData.tools.find(x=>x.id===id);if(item&&!pendingSync.deletes.tools.includes(id)&&!deletedIds.has(id)){const i=data.tools.findIndex(x=>x.id===id);if(i<0)data.tools.push(item);else data.tools[i]=item}}
  data.activity=(activityRes.data||[]).map(x=>({id:x.id,text:x.text,type:x.type,detail:x.detail,by:x.by_name,date:Date.parse(x.created_at)||Date.now()}));
  data.users=(profilesRes.data||[]).map(x=>({id:x.id,firstName:x.first_name,lastName:x.last_name,name:`${x.first_name} ${x.last_name}`.trim(),role:x.role,approved:x.approved}));
  lastSnapshot=snapshot();cloudDirty=Object.values(pendingSync.upserts).some(a=>a.length)||Object.values(pendingSync.deletes).some(a=>a.length);persistPending();localStorage.setItem(KEY,JSON.stringify(data));render();
@@ -59,6 +60,9 @@ if(!mine?.approved){
 async function syncCloud(){
  if(!cloudReady)return;if(syncBusy){await new Promise(resolve=>{const wait=()=>syncBusy?setTimeout(wait,50):resolve();wait()});if(cloudDirty){clearTimeout(window.astekSyncTimer);window.astekSyncTimer=null;return syncCloud()}return}syncBusy=true;const syncing=snapshot();
  try{
+  // A stale local delete queue must never delete a row that is currently present
+  // in this device's inventory. Restore it to the upsert queue instead.
+  for(const kind of ['products','tools']){const liveIds=new Set(data[kind].map(x=>x.id));const cancelled=pendingSync.deletes[kind].filter(id=>liveIds.has(id));pendingSync.deletes[kind]=pendingSync.deletes[kind].filter(id=>!liveIds.has(id));for(const id of cancelled)if(!pendingSync.upserts[kind].includes(id))pendingSync.upserts[kind].push(id)}
   for(const kind of ['products','tools']){
    const old=new Map(lastSnapshot[kind].map(x=>[x.id,x])), now=new Map(data[kind].map(x=>[x.id,x]));
    const changed=pendingSync.upserts[kind].map(id=>data[kind].find(x=>x.id===id)).filter(Boolean);
@@ -127,4 +131,3 @@ sb.auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_OUT'){profile=nul
 (async()=>{const {data:sessionData}=await sb.auth.getSession();if(sessionData.session)await enterSession(sessionData.session.user);else{setAuthMode('signin');$('#authDialog').showModal();setSyncLabel('Giriş gerekli','Hesabınla giriş yap')} })();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloudReady&&!syncBusy&&!cloudLoadBusy&&!window.astekSyncTimer){if(cloudDirty)syncCloud().catch(()=>{});else loadCloud().catch(()=>{})}});window.addEventListener('online',()=>{if(cloudReady&&cloudDirty&&!syncBusy)syncCloud().catch(()=>{})});setInterval(()=>{if(cloudReady&&!syncBusy&&!cloudLoadBusy&&!window.astekSyncTimer){if(cloudDirty)syncCloud().catch(()=>{});else loadCloud().catch(()=>{})}},15000);
 $('#todayLabel').textContent=new Intl.DateTimeFormat('tr-TR',{weekday:'long',day:'numeric',month:'long'}).format(new Date()).toLocaleUpperCase('tr-TR');render();
-
