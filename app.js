@@ -78,7 +78,15 @@ async function syncCloud(){
   for(const kind of ['products','tools']){const removed=pendingSync.deletes[kind].slice();if(removed.length){const {error}=await sb.from('inventory_items').delete().in('id',removed);if(error)throw error}}
   for(const kind of ['products','tools'])if(cloudDeletedIds.size){pendingSync.deletes[kind]=pendingSync.deletes[kind].filter(id=>!cloudDeletedIds.has(id));pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>!cloudDeletedIds.has(id))}
   persistPending();
-  const goneActs=lastSnapshot.activity.filter(x=>x.type!=='sync-delete'&&!data.activity.some(y=>y.id===x.id)).map(x=>x.id);if(canManageUsers()&&goneActs.length){const {error}=await sb.from('activity').delete().in('id',goneActs);if(error)throw error}
+  if(canManageUsers()&&newActs.some(x=>x.type==='sync-reset')){
+   // Reset every user-visible movement, including rows older devices had
+   // already synced and rows beyond the local activity page's loaded limit.
+   // Keep sync-delete tombstones (they prevent deleted inventory returning)
+   // and the sync-reset marker (it prevents pre-reset data from reappearing).
+   const {error}=await sb.from('activity').delete().neq('type','sync-delete').neq('type','sync-reset');if(error)throw error
+  }else{
+   const goneActs=lastSnapshot.activity.filter(x=>x.type!=='sync-delete'&&!data.activity.some(y=>y.id===x.id)).map(x=>x.id);if(canManageUsers()&&goneActs.length){const {error}=await sb.from('activity').delete().in('id',goneActs);if(error)throw error}
+  }
   if(canManageUsers()){
    const oldUsers=new Map(lastSnapshot.users.map(x=>[x.id,x])),nowUsers=new Map(data.users.map(x=>[x.id,x]));
    for(const u of nowUsers.values()){const prev=oldUsers.get(u.id);if(prev&&(prev.role!==u.role||prev.approved!==u.approved||prev.firstName!==u.firstName||prev.lastName!==u.lastName)){const {error}=await sb.from('profiles').update({first_name:u.firstName,last_name:u.lastName,role:u.role,approved:!!u.approved}).eq('id',u.id);if(error)throw error}}
