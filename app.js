@@ -20,7 +20,16 @@ function snapshot(){return {products:clone(data.products),tools:clone(data.tools
 async function loadCloud(){
  if(cloudLoadBusy)return;cloudLoadBusy=true;const readVersion=localChangeVersion;try{
  const {data:mine,error:mineError}=await sb.from('profiles').select('*').eq('id',profile.id).single();
- if(mineError||!mine?.approved){cloudReady=false;data={products:[],tools:[],users:[],activity:[]};profile=null;render();await sb.auth.signOut();return}
+ 
+if(mineError) throw mineError;
+
+if(!mine?.approved){
+  cloudReady=false;
+  profile=null;
+  await sb.auth.signOut();
+  return;
+}
+
  profile={...profile,firstName:mine.first_name,lastName:mine.last_name,role:mine.role,approved:mine.approved};
  const [itemsRes,activityRes,profilesRes]=await Promise.all([
   sb.from('inventory_items').select('*'),sb.from('activity').select('*').order('created_at',{ascending:false}).limit(300),sb.from('profiles').select('*').order('created_at',{ascending:true})
