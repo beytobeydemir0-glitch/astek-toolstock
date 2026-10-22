@@ -37,7 +37,7 @@ if(!mine?.approved){
  for(const r of [itemsRes,activityRes,deletionsRes,profilesRes,resetRes])if(r.error)throw r.error;
  const items=itemsRes.data||[];
  if(localChangeVersion!==readVersion||cloudDirty||syncBusy)return;
- const localData=load(),deletedIds=new Set((deletionsRes.data||[]).map(x=>x.detail));cloudDeletedIds=deletedIds;const remoteResetAt=Date.parse(resetRes.data?.[0]?.created_at)||0,localResetAt=Math.max(0,...localData.activity.filter(x=>x.type==='sync-reset').map(x=>+x.date||0)),resetAt=cloudResetAt=Math.max(remoteResetAt,localResetAt);const cloudHasInventory=items.length>0,legacyMigrationDone=localStorage.getItem('stokcepte-cloud-migrated-v1')==='1';
+ const localData=load(),deletedIds=new Set((deletionsRes.data||[]).map(x=>x.detail));cloudDeletedIds=deletedIds;const resetAt=cloudResetAt=Date.parse(resetRes.data?.[0]?.created_at)||0;const cloudHasInventory=items.length>0,legacyMigrationDone=localStorage.getItem('stokcepte-cloud-migrated-v1')==='1';
  for(const kind of ['products','tools']){
   // Drop an old queued delete if the item is still present in local inventory
   // and no cloud tombstone confirms that the user deleted it.
@@ -61,8 +61,12 @@ async function syncCloud(){
  if(!cloudReady)return;if(syncBusy){await new Promise(resolve=>{const wait=()=>syncBusy?setTimeout(wait,50):resolve();wait()});if(cloudDirty){clearTimeout(window.astekSyncTimer);window.astekSyncTimer=null;return syncCloud()}return}syncBusy=true;let syncing;
  try{
   const {data:resetRows,error:resetError}=await sb.from('activity').select('created_at').eq('type','sync-reset').order('created_at',{ascending:false}).limit(1);if(resetError)throw resetError;
-  const remoteResetAt=Date.parse(resetRows?.[0]?.created_at)||0,localResetAt=Math.max(0,...data.activity.filter(x=>x.type==='sync-reset').map(x=>+x.date||0));cloudResetAt=Math.max(cloudResetAt,remoteResetAt,localResetAt);
-  data.activity=data.activity.filter(x=>x.type==='sync-reset'?+x.date>=cloudResetAt:+x.date>cloudResetAt);
+  const remoteResetAt=Date.parse(resetRows?.[0]?.created_at)||0;cloudResetAt=remoteResetAt;
+  // Device clocks can differ. Keep newly-created local movements regardless of
+  // their device timestamp; rows already present in the previous snapshot are
+  // filtered against the server's reset time.
+  const previousActivityIds=new Set(lastSnapshot.activity.map(x=>x.id));
+  data.activity=data.activity.filter(x=>x.type==='sync-reset'||!previousActivityIds.has(x.id)||+x.date>remoteResetAt);
   for(const kind of ['products','tools']){data[kind]=data[kind].filter(x=>!cloudResetAt||+x.updated>cloudResetAt);const liveIds=new Set(data[kind].map(x=>x.id));pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>liveIds.has(id))}
   localStorage.setItem(KEY,JSON.stringify(data));persistPending();syncing=snapshot();
   // A stale local delete queue must never delete a row that is currently present
@@ -73,8 +77,8 @@ async function syncCloud(){
    const changed=pendingSync.upserts[kind].map(id=>data[kind].find(x=>x.id===id)).filter(Boolean);
    if(changed.length){const {error}=await sb.from('inventory_items').upsert(changed.map(x=>({id:x.id,kind,name:x.name,category:x.category||'',qty:+x.qty,unit:x.unit||'adet',price:x.price===''?null:x.price,note:x.note||'',min:+(x.min??5),updated_at:new Date(x.updated||Date.now()).toISOString()})));if(error)throw error;for(const item of changed){const current=data[kind].find(x=>x.id===item.id);if(current&&JSON.stringify(current)===JSON.stringify(item))pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>id!==item.id)}}
   }
-  persistPending();const oldActs=new Set(lastSnapshot.activity.map(x=>x.id)),newActs=data.activity.filter(x=>!oldActs.has(x.id)&&(x.type==='sync-reset'?+x.date>=cloudResetAt:+x.date>cloudResetAt));
-  if(newActs.length){const {error}=await sb.from('activity').upsert(newActs.map(x=>({id:x.id,text:x.text,type:x.type,detail:x.detail||'',by_name:x.by||'',created_at:new Date(x.date||Date.now()).toISOString()})),{onConflict:'id',ignoreDuplicates:true});if(error)throw error;for(const activity of newActs){if(activity.type==='sync-delete')cloudDeletedIds.add(activity.detail);if(activity.type==='sync-reset')cloudResetAt=Math.max(cloudResetAt,+activity.date||0)}}
+  persistPending();const oldActs=new Set(lastSnapshot.activity.map(x=>x.id)),newActs=data.activity.filter(x=>!oldActs.has(x.id));
+  if(newActs.length){const {data:savedActs,error}=await sb.from('activity').upsert(newActs.map(x=>({id:x.id,text:x.text,type:x.type,detail:x.detail||'',by_name:x.by||''})),{onConflict:'id',ignoreDuplicates:true}).select('id,created_at');if(error)throw error;for(const saved of savedActs||[]){const savedAt=Date.parse(saved.created_at)||Date.now(),activity=data.activity.find(x=>x.id===saved.id),snapshotActivity=syncing.activity.find(x=>x.id===saved.id);if(activity)activity.date=savedAt;if(snapshotActivity)snapshotActivity.date=savedAt}for(const activity of newActs){if(activity.type==='sync-delete')cloudDeletedIds.add(activity.detail);if(activity.type==='sync-reset'){const saved= savedActs?.find(x=>x.id===activity.id);cloudResetAt=Date.parse(saved?.created_at)||cloudResetAt}}}
   for(const kind of ['products','tools']){const removed=pendingSync.deletes[kind].slice();if(removed.length){const {error}=await sb.from('inventory_items').delete().in('id',removed);if(error)throw error}}
   for(const kind of ['products','tools'])if(cloudDeletedIds.size){pendingSync.deletes[kind]=pendingSync.deletes[kind].filter(id=>!cloudDeletedIds.has(id));pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>!cloudDeletedIds.has(id))}
   persistPending();
@@ -92,7 +96,7 @@ async function syncCloud(){
    for(const u of nowUsers.values()){const prev=oldUsers.get(u.id);if(prev&&(prev.role!==u.role||prev.approved!==u.approved||prev.firstName!==u.firstName||prev.lastName!==u.lastName)){const {error}=await sb.from('profiles').update({first_name:u.firstName,last_name:u.lastName,role:u.role,approved:!!u.approved}).eq('id',u.id);if(error)throw error}}
    const removed=[...oldUsers.keys()].filter(id=>!nowUsers.has(id));if(removed.length){const {error}=await sb.from('profiles').delete().in('id',removed);if(error)throw error}
   }
-  lastSnapshot=syncing;cloudDirty=Object.values(pendingSync.upserts).some(a=>a.length)||Object.values(pendingSync.deletes).some(a=>a.length)||JSON.stringify(snapshot())!==JSON.stringify(lastSnapshot);persistPending();setSyncLabel(cloudDirty?'Kaydediliyor…':'Çevrimiçi',cloudDirty?'Yeni değişiklikler aktarılıyor':'Son kayıt eşitlendi');if(cloudDirty){clearTimeout(window.astekSyncTimer);window.astekSyncTimer=setTimeout(()=>{window.astekSyncTimer=null;syncCloud().catch(e=>toast('Çevrimiçi kayıt hatası: '+(e.message||'bağlantıyı kontrol et')))},250)}
+  localStorage.setItem(KEY,JSON.stringify(data));lastSnapshot=syncing;cloudDirty=Object.values(pendingSync.upserts).some(a=>a.length)||Object.values(pendingSync.deletes).some(a=>a.length)||JSON.stringify(snapshot())!==JSON.stringify(lastSnapshot);persistPending();setSyncLabel(cloudDirty?'Kaydediliyor…':'Çevrimiçi',cloudDirty?'Yeni değişiklikler aktarılıyor':'Son kayıt eşitlendi');if(cloudDirty){clearTimeout(window.astekSyncTimer);window.astekSyncTimer=setTimeout(()=>{window.astekSyncTimer=null;syncCloud().catch(e=>toast('Çevrimiçi kayıt hatası: '+(e.message||'bağlantıyı kontrol et')))},250)}
  }finally{syncBusy=false}
 }
 async function enterSession(user){
