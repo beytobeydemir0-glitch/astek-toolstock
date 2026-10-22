@@ -27,6 +27,10 @@ async function loadCloud(){
  ]);
  for(const r of [itemsRes,activityRes,profilesRes])if(r.error)throw r.error;
  const items=itemsRes.data||[];
+  if(items.length===0&&(data.products.length>0||data.tools.length>0)){
+ console.warn('Supabase boş liste döndürdü; stok listesi korundu.');
+ return;
+}
  if(localChangeVersion!==readVersion||cloudDirty||syncBusy)return;
  const localData=load();data.products=items.filter(x=>x.kind==='products').map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));for(const id of pendingSync.deletes.products)data.products=data.products.filter(x=>x.id!==id);for(const id of pendingSync.upserts.products){const item=localData.products.find(x=>x.id===id);if(item&&!pendingSync.deletes.products.includes(id)){const i=data.products.findIndex(x=>x.id===id);if(i<0)data.products.push(item);else data.products[i]=item}}
  data.tools=items.filter(x=>x.kind==='tools').map(x=>({id:x.id,name:x.name,category:x.category,qty:+x.qty,unit:x.unit,price:x.price==null?null:+x.price,note:x.note,min:+x.min,updated:Date.parse(x.updated_at)||Date.now()}));for(const id of pendingSync.deletes.tools)data.tools=data.tools.filter(x=>x.id!==id);for(const id of pendingSync.upserts.tools){const item=localData.tools.find(x=>x.id===id);if(item&&!pendingSync.deletes.tools.includes(id)){const i=data.tools.findIndex(x=>x.id===id);if(i<0)data.tools.push(item);else data.tools[i]=item}}
