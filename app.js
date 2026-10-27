@@ -39,9 +39,7 @@ if(!mine?.approved){
  if(localChangeVersion!==readVersion||cloudDirty||syncBusy)return;
  const localData=load(),deletedIds=new Set((deletionsRes.data||[]).map(x=>x.detail));cloudDeletedIds=deletedIds;const resetAt=cloudResetAt=Date.parse(resetRes.data?.[0]?.created_at)||0;const cloudHasInventory=items.length>0,legacyMigrationDone=localStorage.getItem('stokcepte-cloud-migrated-v1')==='1';
  for(const kind of ['products','tools']){
-  // Drop an old queued delete if the item is still present in local inventory
-  // and no cloud tombstone confirms that the user deleted it.
-  const localIds=new Set(localData[kind].map(x=>x.id));const staleDeletes=pendingSync.deletes[kind].filter(id=>localIds.has(id)&&!deletedIds.has(id));pendingSync.deletes[kind]=pendingSync.deletes[kind].filter(id=>!staleDeletes.includes(id));for(const id of staleDeletes)if(!pendingSync.upserts[kind].includes(id))pendingSync.upserts[kind].push(id);
+  // A queued local deletion is intentional. Keep it pending until its cloud tombstone confirms it.
   for(const item of items)if(item.kind===kind&&deletedIds.has(item.id)&&!pendingSync.deletes[kind].includes(item.id)){pendingSync.deletes[kind].push(item.id);pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>id!==item.id)}
   const cloudIds=new Set(items.filter(x=>x.kind===kind&&!deletedIds.has(x.id)).map(x=>x.id));
   // Keep local-only rows queued until the cloud confirms them. This also
@@ -69,11 +67,9 @@ async function syncCloud(){
   // filtered against the server's reset time.
   const previousActivityIds=new Set(lastSnapshot.activity.map(x=>x.id));
   data.activity=data.activity.filter(x=>x.type==='sync-reset'||!previousActivityIds.has(x.id)||+x.date>remoteResetAt);
-  for(const kind of ['products','tools']){data[kind]=data[kind].filter(x=>!cloudResetAt||+x.updated>cloudResetAt);const liveIds=new Set(data[kind].map(x=>x.id));pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>liveIds.has(id))}
+  for(const kind of ['products','tools']){const deleted=new Set(pendingSync.deletes[kind]);data[kind]=data[kind].filter(x=>(!cloudResetAt||+x.updated>cloudResetAt)&&!deleted.has(x.id));const liveIds=new Set(data[kind].map(x=>x.id));pendingSync.upserts[kind]=pendingSync.upserts[kind].filter(id=>liveIds.has(id)&&!deleted.has(id))}
   localStorage.setItem(KEY,JSON.stringify(data));persistPending();syncing=snapshot();
-  // A stale local delete queue must never delete a row that is currently present
-  // in this device's inventory. Restore it to the upsert queue instead.
-  for(const kind of ['products','tools']){const liveIds=new Set(data[kind].map(x=>x.id));const cancelled=pendingSync.deletes[kind].filter(id=>liveIds.has(id));pendingSync.deletes[kind]=pendingSync.deletes[kind].filter(id=>!liveIds.has(id));for(const id of cancelled)if(!pendingSync.upserts[kind].includes(id))pendingSync.upserts[kind].push(id)}
+  // Pending deletions stay authoritative even if a stale record arrives from another device.
   for(const kind of ['products','tools']){
    const old=new Map(lastSnapshot[kind].map(x=>[x.id,x])), now=new Map(data[kind].map(x=>[x.id,x]));
    const changed=pendingSync.upserts[kind].map(id=>data[kind].find(x=>x.id===id)).filter(Boolean);
